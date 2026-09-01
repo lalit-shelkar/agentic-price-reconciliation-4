@@ -1,0 +1,60 @@
+# Example configuration. Load with `reconciliation.config.load_settings(path)`.
+#
+# Every value below is a placeholder tracking an open question in
+# `requirements.md` §6 — none of these are signed-off numbers. Unknown keys are
+# rejected at load time, so a stale file fails at startup rather than silently
+# leaving a guardrail at its default.
+
+model_version: "agent/0.1.0"
+
+# FR1 / spec 05 step 1.3 — OPEN QUESTION 1: real per-product tolerance undecided.
+detection:
+  tolerance_bps:
+    barrier_fx_option: "2.0"
+    barrier_rate_note: "5.0"
+  default_tolerance_bps: "2.0"
+
+# spec 05 G4 / spec 10 §1 — below this, raise a manual term-sheet task instead of
+# drafting comms.
+term_sheet:
+  min_extraction_confidence: 0.85
+
+# spec 06 G3 / FR5 / spec 10 §2 — below this, intent is forced to PARTIAL.
+intent:
+  min_intent_confidence: 0.90
+
+# spec 06 §auto-close criteria.
+# `enabled: false` is required until Model Risk Management has reviewed the
+# thresholds (spec 09 §governance) and shadow mode has validated classification
+# accuracy (architecture.md §6 step 6). Do not flip this to enable a demo.
+auto_close:
+  enabled: false
+  min_agree_confidence: 0.95
+  price_match_tolerance_bps: "1.0"
+  # OPEN QUESTION 2: auto-close notional/risk threshold undecided.
+  max_auto_close_notional: "5000000"
+  counterparty_flag_lookback: "P90D"
+
+# spec 11 §timing, spec 10 §3. OPEN QUESTION 3: is the counterparty response window
+# contractual, or does the firm need to set and communicate it?
+sla:
+  gate1_review: "PT15M"
+  gate1_reminder_after: "PT15M"
+  gate1_escalate_after: "PT45M"
+  counterparty_response: "P2D"
+  gate2_first_action: "P1D"
+  gate2_reminder_after: "PT4H"
+  gate2_escalate_after: "P1D"
+
+# spec 06 G4 / spec 10 §4. OPEN QUESTION 7: does the counter reset on materially new
+# information? `false` is the conservative reading — every loop counts toward the cap.
+loop_guard:
+  max_clarification_loops: 3
+  reset_on_new_information: false
+
+# spec 05 G7 / spec 06 G7. `max_attempts` is schema-capped at 3 — it cannot be
+# raised by configuration.
+retry:
+  max_attempts: 3
+  initial_backoff: "PT1S"
+  backoff_multiplier: 2.0

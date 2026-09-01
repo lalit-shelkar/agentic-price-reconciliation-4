@@ -1,0 +1,30 @@
+[project]
+name = "agentic-price-reconciliation"
+version = "0.1.0"
+description = "Two-agent price/barrier break reconciliation workflow"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.9",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# Pydantic emits a UserWarning when a raw dict is smuggled past validation into a
+# typed field. That is a real defect in a codebase where the Case schema is the
+# enforcement point for spec 05 G6, so fail on it rather than log it.
+filterwarnings = ["error::UserWarning"]
