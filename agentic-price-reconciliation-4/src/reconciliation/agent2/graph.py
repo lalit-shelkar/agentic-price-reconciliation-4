@@ -61,7 +61,11 @@ ends". `close_resolved_case` therefore derives its actor from
 actually authorized them (read off the case's own closed `DISPUTE_ESCALATION` gate
 record — no new parameter needed), and only a genuine `AGENT`-authored resolution
 (the dormant straight-through path, live once the switch flips on) is attributed to
-Agent 2 itself.
+Agent 2 itself. `_close_actor`'s `is_human` decision comes from `closed_by`
+directly, not from the gate-record scan succeeding — a scan miss (a gate record
+present but with no `.actor`) still reports a human actor (identity `"unknown"`),
+never silently downgrades to Agent 2's identity. See `auto_close.py`'s module
+docstring for why that distinction matters.
 
 ## `assigned_sme` is caller-provided, like Agent 1's `assigned_analyst`
 
@@ -166,11 +170,19 @@ def _actor() -> Actor:
 
 
 def _close_actor(case: Case) -> Actor:
-    """Steps 2.6b/2.7's actor — see module docstring."""
+    """Steps 2.6b/2.7's actor — see module docstring.
+
+    Whether this is a human closure is read directly off the already-persisted,
+    already-trusted `Case.resolution.closed_by` — not re-derived by requiring the
+    gate-actor scan below to succeed. The scan is only used to find a *display
+    identity* for the human; if it can't find one, this still returns a human
+    Actor (identity "unknown"), never silently downgrades to an agent identity.
+    That downgrade is exactly what would let `Orchestrator._context` invoke
+    `AutoCloseCheck.evaluate` on a transition no human actually authorized —
+    see `auto_close.py`'s module docstring for the incident this replaced.
+    """
     if case.resolution is not None and case.resolution.closed_by == ClosedBy.HUMAN:
-        for gate in reversed(case.human_gates):
-            if gate.gate_type == GateType.DISPUTE_ESCALATION and gate.actor:
-                return Actor.human(gate.actor)
+        return Actor.human(_gate2_actor_identity(case) or "unknown")
     return _actor()
 
 
@@ -266,11 +278,26 @@ def _make_booking_write_node(deps: Agent2Deps):
                 "on file (steps 2.6b/2.7 require step 2.2 or Human gate 2 to have "
                 "run first)"
             )
+        if case.resolution.final_price is None:
+            # A missing final_price (e.g. a Legal escalation that hasn't settled
+            # on one yet) must never be written as a fabricated Decimal(0) — that
+            # would be a false financial record in the system of record. Block
+            # the same way a technical write failure does: hold at RESOLVED,
+            # never silently drop (spec 10 §1).
+            if not case.has_open_manual_task(ManualTaskKind.BOOKING_WRITE_FAILED):
+                orch.raise_manual_task(
+                    case,
+                    ManualTaskKind.BOOKING_WRITE_FAILED,
+                    "resolution has no final_price on file; a human must record "
+                    "one before the booking write can proceed",
+                    _actor(),
+                )
+            return {"booking_write_ok": False}
         actor = _close_actor(case)
         update = BookingUpdate(
             case_id=case.case_id,
             trade_id=case.trade_id,
-            final_price=case.resolution.final_price or Decimal(0),
+            final_price=case.resolution.final_price,
             resolution_outcome=case.resolution.outcome.value,
             updated_by=actor.identity,
         )
@@ -555,7 +582,9 @@ def _notify_sme_and_dashboard(tools: Agent2Tools, case: Case, state: Agent2State
         summary=f"{state['intent'].value} response on trade {case.trade_id}",
         payload={
             "confidence": state["confidence"],
-            "stated_price": str(state["stated_price"]) if state.get("stated_price") else None,
+            "stated_price": (
+                str(state["stated_price"]) if state.get("stated_price") is not None else None
+            ),
         },
     )
 
@@ -628,7 +657,18 @@ def build_clarification_graph(deps: Agent2Deps) -> StateGraph:
     def send_and_record(state: Agent2State) -> dict:
         case = tools.case_store.get(state["case_id"])
         draft = state["draft"]
-        sme = _gate2_actor_identity(case) or state.get("assigned_sme") or AGENT_VERSION
+        sme = _gate2_actor_identity(case)
+        if sme is None:
+            # No fallback to AGENT_VERSION here: this send must be attributable
+            # to the human who authorized it via the gate (module docstring on
+            # `_gate2_actor_identity`), never silently to Agent 2 itself. Reaching
+            # this means the caller violated this graph's own precondition — see
+            # `build_clarification_graph`'s docstring — so fail loud rather than
+            # misattribute.
+            raise ValueError(
+                f"cannot send clarification for {case.case_id}: no Human gate 2 "
+                "actor on file (request_more_info must have run first)"
+            )
         receipt = tools.counterparty_comms.send(draft, approved_by=sme)
         message = CommsMessage(
             message_id=receipt.receipt_id,

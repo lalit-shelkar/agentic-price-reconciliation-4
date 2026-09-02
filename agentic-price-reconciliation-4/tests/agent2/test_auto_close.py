@@ -14,6 +14,7 @@ from reconciliation.domain.case import (
     ExternalPrice,
     InternalPrice,
     Resolution,
+    TermSheetExtract,
 )
 from reconciliation.domain.enums import (
     ClosedBy,
@@ -48,6 +49,16 @@ def _inbound(intent: ResponseIntent, confidence: float, stated_price) -> CommsMe
     )
 
 
+def _term_sheet_citing(source_name: str) -> TermSheetExtract:
+    return TermSheetExtract(
+        fixing_source_clause=f"{source_name.upper()} fixing at 11:00 CET",
+        barrier_definition="Barrier observed continuously on the Fixing Source.",
+        dispute_resolution_clause="Disputes referred to the Calculation Agent.",
+        clause_citation="Section 4.2(a)",
+        extraction_confidence=0.95,
+    )
+
+
 def _case(
     *,
     intent: ResponseIntent = ResponseIntent.AGREE,
@@ -55,6 +66,7 @@ def _case(
     stated_price=Decimal("1.08450"),
     internal_price=Decimal("1.08450"),
     external_prices: list[ExternalPrice] | None = None,
+    term_sheet_extract: TermSheetExtract | None = None,
     resolution: Resolution | None = None,
 ) -> Case:
     return Case(
@@ -68,6 +80,7 @@ def _case(
             else None
         ),
         external_prices=external_prices or [],
+        term_sheet_extract=term_sheet_extract,
         comms_thread=[_inbound(intent, confidence, stated_price)],
         resolution=resolution,
     )
@@ -148,12 +161,13 @@ def test_price_within_internal_tolerance_passes_criterion_2():
     assert decision.eligible is True
 
 
-def test_price_matches_external_reference_exactly_passes_criterion_2():
-    """Even outside internal tolerance, an exact match to a pulled reference
-    source (the contractually-cited fixing source) satisfies criterion 2."""
+def test_price_matches_the_cited_reference_source_exactly_passes_criterion_2():
+    """Even outside internal tolerance, an exact match to the *contractually-
+    cited* fixing source satisfies criterion 2."""
     case = _case(
         stated_price=Decimal("1.09000"),
         internal_price=Decimal("1.08450"),
+        term_sheet_extract=_term_sheet_citing("SIX"),
         external_prices=[
             ExternalPrice(
                 source=ExternalPriceSource.SIX,
@@ -168,6 +182,64 @@ def test_price_matches_external_reference_exactly_passes_criterion_2():
     ).evaluate(case)
 
     assert decision.eligible is True
+
+
+def test_price_matching_an_uncited_reference_source_fails_criterion_2():
+    """The term sheet cites SIX; an exact match against Bloomberg (a source
+    Agent 1 pulled but the contract doesn't name) must NOT satisfy criterion 2 —
+    this is the specific case spec 06 G2's "contractually-cited" wording guards
+    against."""
+    case = _case(
+        stated_price=Decimal("1.09000"),
+        internal_price=Decimal("1.08450"),
+        term_sheet_extract=_term_sheet_citing("SIX"),
+        external_prices=[
+            ExternalPrice(
+                source=ExternalPriceSource.BLOOMBERG,
+                value=Decimal("1.09000"),  # coincidentally matches stated_price
+                as_of=NOW,
+                ticker=TRADE_ID,
+            ),
+            ExternalPrice(
+                source=ExternalPriceSource.SIX,
+                value=Decimal("1.08460"),  # the actually-cited source disagrees
+                as_of=NOW,
+                ticker=TRADE_ID,
+            ),
+        ],
+    )
+    decision = _checker(
+        _settings(price_match_tolerance_bps=Decimal("1.0")), _pricing()
+    ).evaluate(case)
+
+    assert decision.eligible is False
+    assert any("criterion 2 failed" in r for r in decision.reasons)
+
+
+def test_price_match_unverifiable_when_term_sheet_names_no_recognised_source():
+    """No term sheet extract at all -> the reference-source leg can't be
+    verified; criterion 2 still only passes via the internal-tolerance leg."""
+    case = _case(
+        stated_price=Decimal("1.09000"),
+        internal_price=Decimal("1.08450"),
+        term_sheet_extract=None,
+        external_prices=[
+            ExternalPrice(
+                source=ExternalPriceSource.SIX,
+                value=Decimal("1.09000"),
+                as_of=NOW,
+                ticker=TRADE_ID,
+            )
+        ],
+    )
+    decision = _checker(
+        _settings(price_match_tolerance_bps=Decimal("1.0")), _pricing()
+    ).evaluate(case)
+
+    assert decision.eligible is False
+    assert any(
+        "no recognised source in the term sheet clause" in r for r in decision.reasons
+    )
 
 
 def test_price_mismatch_fails_criterion_2():
@@ -265,13 +337,18 @@ def test_all_failing_reasons_are_reported_not_just_the_first():
 
 
 # --------------------------------------------------------------------------- #
-# Human-resolved cases are a mechanical follow-through, not re-litigated
+# evaluate() has no special case for an already human-authorized resolution —
+# that decision belongs to agent2/graph.py's `_close_actor`, which is why
+# `Orchestrator._context` never calls this evaluator for a correctly-attributed
+# human closure in the first place. See auto_close.py's module docstring.
 # --------------------------------------------------------------------------- #
 
 
-def test_human_resolved_case_is_trivially_eligible_regardless_of_criteria():
-    """A dispute Legal resolved will never show intent=AGREE — re-running the 4
-    criteria on it would permanently dead-end a human-authorized closure."""
+def test_evaluate_does_not_special_case_a_human_authorized_resolution():
+    """Even if `evaluate()` were ever called on a case a human already resolved
+    (it shouldn't be, per `_close_actor`), it must run the real 4 criteria, not
+    grant eligibility unconditionally — that bypass was the audit-integrity gap
+    this module's docstring records."""
     case = _case(
         intent=ResponseIntent.DISPUTE,
         resolution=Resolution(
@@ -282,4 +359,5 @@ def test_human_resolved_case_is_trivially_eligible_regardless_of_criteria():
     )
     decision = _checker(_settings(), _pricing()).evaluate(case)
 
-    assert decision.eligible is True
+    assert decision.eligible is False
+    assert any("criterion 1 failed" in r for r in decision.reasons)

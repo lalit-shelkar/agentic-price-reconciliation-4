@@ -39,14 +39,25 @@ rule above.
 
 Spec 06 says Agent 2 performs the booking write + CLOSED transition (steps
 2.6b/2.7) for *every* terminal path — "agent auto-close, human-confirmed, or
-Legal-confirmed" alike (spec 06 step 2.6b). But a case resolved via Human gate 2
+Legal-confirmed" alike (spec 06 step 2.6b). A case resolved via Human gate 2
 (`resolve_manually` / `escalate_to_legal`) will almost never show `intent=AGREE`
 (a Legal-escalated dispute certainly won't), so re-running the 4 criteria on it
 would fail closed and permanently block Agent 2 from ever closing a human-resolved
-case — a dead end spec 06 explicitly rules out ("no dead ends"). Those 4 criteria
-exist to gate an *unattended* decision; a case whose `resolution.closed_by` is
-already `HUMAN` was never that, so this evaluator treats it as trivially eligible
-rather than re-litigating a decision a human already made at the gate.
+case — a dead end spec 06 explicitly rules out ("no dead ends").
+
+This is **not** handled here by special-casing `evaluate()` for a human-authorized
+`Case.resolution` — an earlier version of this module did that, but it meant
+`evaluate()` was only ever skipped for the *right* reason if the caller correctly
+identified the closure as human-authorized first, and any caller that failed to
+(e.g. a gate-actor lookup miss) would fall through to calling `evaluate()` with an
+agent actor and hit a bypass that granted eligibility without checking anything —
+an audit-integrity gap. Instead, `agent2/graph.py`'s `_close_actor` reads
+`Case.resolution.closed_by` directly — the already-persisted, already-trusted fact
+— to decide the actor for the CLOSED transition. `Orchestrator._context` only
+calls this evaluator at all when the actor is *not* human, so a correctly
+human-attributed closure never reaches `evaluate()` in the first place; this
+module stays exactly what its class docstring says it is, the 4-criteria check,
+with no second decision folded in.
 """
 
 from __future__ import annotations
@@ -55,7 +66,7 @@ from decimal import Decimal
 
 from ..config.settings import Settings
 from ..domain.case import Case
-from ..domain.enums import ClosedBy, CommsDirection, ResponseIntent
+from ..domain.enums import CommsDirection, ExternalPriceSource, ResponseIntent
 from ..orchestrator.engine import AutoCloseDecision
 from ..orchestrator.tool_wrapper import ToolCallExhausted, call_tool
 from ..tools.contracts import CounterpartyFlagService, PricingSystemApi
@@ -97,6 +108,27 @@ def _decimal_or_none(raw: object) -> Decimal | None:
         return None
 
 
+def _cited_source(case: Case) -> ExternalPriceSource | None:
+    """Which pulled reference source the term sheet actually names, for
+    criterion 2's reference-source match.
+
+    `TermSheetExtract.fixing_source_clause` is free text (spec 08 has no
+    structured field naming the source), so this is a case-insensitive
+    substring match against the known source names — the same fixed-vocabulary
+    approach `agent2.intent` uses for `quoted_barrier_status`. Returns `None` if
+    the clause doesn't name a recognised source; callers must treat that as "the
+    reference-source match can't be verified", not as "any source counts" — the
+    fail-closed reading spec 06 G2 requires.
+    """
+    if case.term_sheet_extract is None:
+        return None
+    clause = case.term_sheet_extract.fixing_source_clause.lower()
+    for source in ExternalPriceSource:
+        if source.value in clause:
+            return source
+    return None
+
+
 class AutoCloseCheck:
     """Deterministic evaluation of the four spec 06 auto-close criteria."""
 
@@ -111,18 +143,12 @@ class AutoCloseCheck:
         self._flags = counterparty_flags
 
     def evaluate(self, case: Case) -> AutoCloseDecision:
-        """Return eligibility plus every failing reason."""
-        if case.resolution is not None and case.resolution.closed_by == ClosedBy.HUMAN:
-            return AutoCloseDecision(
-                True,
-                (
-                    "resolution already human-authorized via Human gate 2 — "
-                    "closure is a mechanical follow-through (spec 06 steps "
-                    "2.6b/2.7), not a straight-through decision the 4 criteria "
-                    "below are meant to gate",
-                ),
-            )
+        """Return eligibility plus every failing reason.
 
+        No special-casing for an already human-authorized resolution — see the
+        module docstring's "Closure that was already human-authorized" section.
+        A correctly-attributed human closure never reaches this method at all.
+        """
         ac = self._settings.auto_close
         reasons: list[str] = []
         payload = _latest_inbound_payload(case)
@@ -185,14 +211,21 @@ class AutoCloseCheck:
         matches_internal = _within_tolerance(
             stated_price, case.internal_price.value, tolerance_bps
         )
-        matches_reference_source = any(
-            p.value == stated_price for p in case.external_prices
+        cited_source = _cited_source(case)
+        cited_price = case.price_for(cited_source) if cited_source is not None else None
+        matches_reference_source = (
+            cited_price is not None and cited_price.value == stated_price
         )
         if not (matches_internal or matches_reference_source):
+            source_note = (
+                f"({cited_source.value})" if cited_source is not None
+                else "(no recognised source in the term sheet clause)"
+            )
             reasons.append(
                 f"criterion 2 failed: stated price {stated_price} matches neither "
                 f"the internal price ({case.internal_price.value}) within "
-                f"{tolerance_bps}bps nor a pulled reference-source price"
+                f"{tolerance_bps}bps nor the contractually-cited fixing source "
+                f"{source_note}"
             )
 
     # ------------------------------------------------------------------ #

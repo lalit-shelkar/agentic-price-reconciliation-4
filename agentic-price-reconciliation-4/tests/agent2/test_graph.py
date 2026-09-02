@@ -7,6 +7,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from reconciliation.agent2.agent import Agent2
+from reconciliation.agent2.graph import _close_actor
+from reconciliation.domain.case import Resolution
 from reconciliation.domain.enums import (
     CaseStatus,
     ClosedBy,
@@ -398,6 +400,72 @@ def test_close_resolved_case_is_idempotent_once_closed(
     assert result.case.status == CaseStatus.CLOSED
     assert booking_system.call_count == calls_after_first_close
     assert "case already past RESOLVED; no-op" in result.notes
+
+
+def test_close_resolved_case_refuses_to_fabricate_a_zero_price(
+    agent2_tools,
+    orchestrator,
+    settings,
+    checkpointer,
+    store,
+    email_parser,
+    booking_system,
+    agent2_gate_service,
+    awaiting_response_case,
+):
+    """A Legal escalation with no final_price on file must never write a
+    fabricated Decimal(0) to the booking system — held at RESOLVED instead,
+    same as a technical write failure (spec 10 §1)."""
+    _seed_reply(
+        email_parser,
+        "MSG-R12",
+        quoted_barrier_status="disputed",
+        field_confidence={"quoted_barrier_status": 0.9},
+    )
+    agent2 = _agent2(agent2_tools, orchestrator, settings, checkpointer)
+    agent2.handle_response(awaiting_response_case.case_id, "MSG-R12", ASSIGNED_SME)
+    escalated = store.get(awaiting_response_case.case_id)
+
+    resolved = agent2_gate_service.escalate_to_legal(
+        escalated, "sme-9", "contractual ambiguity, referred to Legal"
+    )
+    assert resolved.resolution.final_price is None
+
+    result = agent2.close_resolved_case(resolved.case_id)
+
+    assert result.case.status == CaseStatus.RESOLVED  # not CLOSED
+    assert booking_system.updates == []
+    open_tasks = result.case.open_manual_tasks()
+    assert len(open_tasks) == 1
+    assert open_tasks[0].kind == ManualTaskKind.BOOKING_WRITE_FAILED
+
+
+def test_close_actor_reports_human_even_when_no_gate_record_carries_the_actor():
+    """Whether a closure is human-authorized comes from `resolution.closed_by`
+    directly, never from the gate-actor scan succeeding — a scan miss must not
+    silently downgrade to an agent identity (the audit-integrity gap this
+    replaced; see auto_close.py's module docstring)."""
+    from reconciliation.domain.case import Case
+    from reconciliation.domain.enums import ProductType
+
+    case = Case(
+        trade_id="TRD-X",
+        counterparty_id="CP-X",
+        product_type=ProductType.BARRIER_FX_OPTION,
+        detected_at=datetime(2026, 9, 1, tzinfo=UTC),
+        resolution=Resolution(
+            outcome=ResolutionOutcome.AGREED_INTERNAL,
+            final_price=Decimal("1.0"),
+            closed_by=ClosedBy.HUMAN,
+            rationale="resolved out of band",
+        ),
+        # No human_gates at all — the gate-actor scan will find nothing.
+    )
+
+    actor = _close_actor(case)
+
+    assert actor.is_human is True
+    assert actor.identity == "unknown"
 
 
 # --------------------------------------------------------------------------- #
