@@ -125,12 +125,17 @@ Tracks `architecture.md` §6.
 | Step | Status | Branch |
 |---|---|---|
 | 1. Data model + orchestrator skeleton | ✅ done | `develop` |
-| 2. Agent 1 detection / price pull / term sheet | in progress | `feat/agent-1` |
-| 3. Agent 1 drafting + Human gate 1 | gate service ✅ done; drafting pending | `develop` / `feat/agent-1` |
+| 2. Agent 1 detection / price pull / term sheet | ✅ done (`agent1/graph.py`, `rules.py`) | `feat/agent-1` |
+| 3. Agent 1 drafting + Human gate 1 | ✅ done (`agent1/drafting.py`; gate service on `develop`) | `feat/agent-1` |
 | 4. Agent 2 response parsing, auto-agree path | not started | `feat/agent-2` |
 | 5. Human gate 2 + loop-back | ✅ done | `develop` |
 | 6. Enable auto-close after shadow-mode validation | blocked — needs MRM review | — |
 | 7. Audit/compliance hardening + MRM review | not started | — |
+
+Agent 1's graph (`src/reconciliation/agent1/graph.py`) is the reference pattern for
+Agent 2's — same LangGraph shape, same "no `interrupt()`" rule, same
+`orchestrator/graph_runtime.py` plumbing. See that module's docstring for why the
+Case is created one node earlier than spec 05's literal step numbering.
 
 Step 6 is deliberately gated: `settings.auto_close.enabled` ships `False` and must
 stay that way until Model Risk Management has reviewed the thresholds
