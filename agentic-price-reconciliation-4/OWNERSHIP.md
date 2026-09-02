@@ -127,15 +127,35 @@ Tracks `architecture.md` §6.
 | 1. Data model + orchestrator skeleton | ✅ done | `develop` |
 | 2. Agent 1 detection / price pull / term sheet | ✅ done (`agent1/graph.py`, `rules.py`) | `feat/agent-1` |
 | 3. Agent 1 drafting + Human gate 1 | ✅ done (`agent1/drafting.py`; gate service on `develop`) | `feat/agent-1` |
-| 4. Agent 2 response parsing, auto-agree path | not started | `feat/agent-2` |
+| 4. Agent 2 response parsing, auto-agree path | ✅ done (`agent2/graph.py`, `intent.py`, `auto_close.py`) | `develop` |
 | 5. Human gate 2 + loop-back | ✅ done | `develop` |
 | 6. Enable auto-close after shadow-mode validation | blocked — needs MRM review | — |
 | 7. Audit/compliance hardening + MRM review | not started | — |
 
-Agent 1's graph (`src/reconciliation/agent1/graph.py`) is the reference pattern for
-Agent 2's — same LangGraph shape, same "no `interrupt()`" rule, same
-`orchestrator/graph_runtime.py` plumbing. See that module's docstring for why the
-Case is created one node earlier than spec 05's literal step numbering.
+Agent 1's graph (`src/reconciliation/agent1/graph.py`) was the reference pattern
+Agent 2's (`agent2/graph.py`) followed — same LangGraph shape, same "no
+`interrupt()`" rule, same `orchestrator/graph_runtime.py` plumbing. Both are merged
+to `develop`; the workflow is now end-to-end (detect → draft → gate 1 → respond →
+resolve → gate 2 → close) with 152 tests passing.
+
+### Known follow-ups (not blockers, tracked here so they aren't lost)
+
+- `AutoCloseCheck` is not yet wired into any production `Orchestrator` — only test
+  fixtures construct one. Needs a composition-root when a real deployment target
+  exists.
+- `agent2/auto_close.py`'s criteria-3/4 checks only degrade to "unverifiable" on
+  `ToolCallExhausted`; any other exception still propagates uncaught instead of
+  routing to Human gate 2.
+- `reconcile_agreement`'s failure path evaluates auto-close criteria twice (once
+  inside the guardrail check, once again to read `.reasons`) — harmless now,
+  doubles tool calls once `auto_close.enabled` flips on.
+- The bps-divergence formula (`agent1/rules.py` vs `agent2/auto_close.py`) and a
+  couple of small lookups are duplicated across the two agents with no shared
+  home, since `agent1/`/`agent2/` can't import each other. Worth a `domain/`-level
+  helper if either needs to change.
+- `assigned_sme` (Agent 2) and `assigned_analyst` (Agent 1) are caller-provided
+  with no backing routing/lookup tool in `tools/contracts.py` — a real trigger
+  integration will need to resolve these before it can call either agent.
 
 Step 6 is deliberately gated: `settings.auto_close.enabled` ships `False` and must
 stay that way until Model Risk Management has reviewed the thresholds
