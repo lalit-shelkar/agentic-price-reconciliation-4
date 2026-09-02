@@ -311,6 +311,15 @@ class GateService(Protocol):
         self, case: Case, gate_type: GateType, assigned_to: str, context: dict[str, object]
     ) -> Case: ...
 
+    def submit_for_approval(
+        self, case: Case, draft: DraftComms, assigned_to: str
+    ) -> Case:
+        """Agent 1 step 1.9's specific entry point: persists the draft onto the
+        case (spec 11 §reliability — survives a restart) and opens Human gate 1
+        in one call. `open_gate` alone remains the generic entry any agent uses
+        for a gate with no associated draft (e.g. Agent 2 opening gate 2)."""
+        ...
+
 
 # --------------------------------------------------------------------------- #
 # Per-agent toolboxes — the least-privilege boundary

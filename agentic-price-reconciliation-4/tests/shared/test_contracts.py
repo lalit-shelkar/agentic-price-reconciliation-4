@@ -12,10 +12,12 @@ security control; it is a tripwire for accidental widening in this repo.
 from __future__ import annotations
 
 from reconciliation.domain.case import AuditEntry, CommsMessage
+from reconciliation.gates.service import HumanGateService
 from reconciliation.tools.contracts import (
     Agent1Tools,
     Agent2Tools,
     BookingSystemApi,
+    GateService,
     ParsedEmail,
 )
 
@@ -45,6 +47,16 @@ def test_agent2_toolbox_has_the_write_path():
 # --------------------------------------------------------------------------- #
 # spec 06 G1 — booking write scoped to one operation
 # --------------------------------------------------------------------------- #
+
+
+def test_human_gate_service_satisfies_the_gate_service_protocol():
+    """`Agent1Tools.gates` is typed as `GateService`, not the concrete class —
+    this pins that `HumanGateService` structurally satisfies it, including
+    `submit_for_approval` (Agent 1 step 1.9's entry point)."""
+    assert isinstance(HumanGateService, type)
+    for method in ("open_gate", "submit_for_approval"):
+        assert hasattr(HumanGateService, method)
+    assert issubclass(HumanGateService, GateService)
 
 
 def test_booking_api_exposes_exactly_one_operation():
