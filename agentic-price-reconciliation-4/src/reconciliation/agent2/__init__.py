@@ -3,10 +3,11 @@
 OWNERSHIP: this package is owned by the Agent 2 branch (`feat/agent-2`). Do not
 implement it from `feat/agent-1`; see OWNERSHIP.md.
 
-The modules here ship as contract stubs: real signatures, real return types, bodies
-raising `NotImplementedError`. That gives the Agent 2 author a surface to fill in,
-and lets shared and Agent 1 tests import the package without depending on it being
-finished.
+`intent.py` and `auto_close.py` are pure, deterministic logic modules; `graph.py`
+wires them (plus the tool contracts and the orchestrator) into the four LangGraph
+`StateGraph`s spec 06's steps require, one per external trigger — see that
+module's docstring. `agent.py`'s `Agent2` class is the thin public entry point the
+rest of the system calls.
 """
 
 from .agent import Agent2, Agent2Result

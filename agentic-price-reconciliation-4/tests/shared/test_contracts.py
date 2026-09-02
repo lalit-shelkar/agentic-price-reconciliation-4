@@ -120,14 +120,3 @@ def test_agent2_contract_stubs_are_importable():
 
     for cls in (Agent2, AutoCloseCheck, IntentClassifier):
         assert cls is not None
-
-
-def test_agent2_stubs_raise_rather_than_returning_a_permissive_default():
-    """An unimplemented check must never read as 'criteria met' (spec 06 G2)."""
-    import pytest
-
-    from reconciliation.agent2.auto_close import AutoCloseCheck
-
-    check = AutoCloseCheck.__new__(AutoCloseCheck)
-    with pytest.raises(NotImplementedError):
-        check.evaluate(None)  # type: ignore[arg-type]
