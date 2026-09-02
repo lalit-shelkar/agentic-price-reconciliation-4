@@ -24,7 +24,8 @@ src/reconciliation/
   domain/          SHARED    spec 08 — Case model, enums
   config/          SHARED    all configurable thresholds
   store/           SHARED    durable Case DB + append-only audit log
-  orchestrator/    SHARED    state machine, engine, retry wrapper, timers
+  orchestrator/    SHARED    state machine, engine, retry wrapper, timers,
+                              LangGraph checkpointer/thread-id plumbing
   tools/           SHARED    spec 08 tool contracts + fakes
   gates/           SHARED    spec 07 both human checkpoints
   agent1/          AGENT 1   spec 05 only
@@ -40,6 +41,27 @@ tests/
 branch. Open a small PR against `develop` for that change alone, get the other
 owner's review, and rebase. A shared-file change smuggled inside a feature branch is
 how the two of you end up in a three-way conflict on the state machine.
+
+## Agent execution runtime — LangGraph, scoped
+
+Each agent's internal step sequence (spec 05 steps 1.1-1.9; spec 06 steps 2.1-2.7)
+is built as a LangGraph `StateGraph`, one node per spec step, using the shared
+plumbing in `orchestrator/graph_runtime.py` (checkpointer factory, thread-id
+convention, `parallel_call_tools` for the parallel market-data pulls in step 1.4).
+See that module's docstring for the full rationale; the two things that matter for
+both branches:
+
+* **The Case DB, audit log, and `[enforced]` guardrail table are unchanged and
+  unbypassed.** A graph node calls `Orchestrator.transition` /
+  `update_without_transition` exactly like before — LangGraph is a different
+  *caller* into the same enforcement points, not a new one.
+* **Neither agent's graph uses `interrupt()`.** Both human gates already resolve
+  synchronously in `gates/service.py`, called directly by the approval UI —
+  pausing a graph thread for a gate would create a checkpoint nothing legitimately
+  resumes. A graph node hands a case to a gate (or to a wait state) and reaches
+  `END`; a later external trigger (webhook reply, SLA timer) starts a **fresh**
+  graph invocation. `agent1/graph.py` is the worked reference once it lands —
+  mirror its structure for spec 06, and do not reach for `interrupt()` on gate 2.
 
 ## Why the foundation had to land first
 
@@ -61,6 +83,7 @@ defined once:
 | Append-only audit | FR8 / spec 09 | `store/sqlite_store.py` triggers |
 | Kill switch from any state | FR9 / 10 §6 | `orchestrator/state_machine.py` |
 | Data minimisation (no raw bodies) | 05 G6 / spec 09 | `domain/case.py` — no body field exists |
+| Gate-1 draft survives a restart | spec 11 §reliability | `domain/case.py` `Case.pending_draft` (persisted, not an in-process dict) |
 
 ## Contract between the two agents
 

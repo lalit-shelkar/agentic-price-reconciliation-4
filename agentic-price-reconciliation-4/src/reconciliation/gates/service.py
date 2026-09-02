@@ -19,7 +19,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from ..config.settings import Settings
-from ..domain.case import Case, Resolution
+from ..domain.case import Case, DraftComms, Resolution
 from ..domain.enums import (
     CaseStatus,
     ClosedBy,
@@ -30,7 +30,7 @@ from ..domain.enums import (
 from ..orchestrator.engine import Actor, Orchestrator
 from ..orchestrator.state_machine import GuardrailViolation, TransitionError
 from ..orchestrator.timers import TimerKind
-from ..tools.contracts import CounterpartyCommsService, DraftComms, NotificationService
+from ..tools.contracts import CounterpartyCommsService, NotificationService
 
 
 @dataclass
@@ -83,9 +83,6 @@ class HumanGateService:
         self._notifications = notifications
         self._comms = counterparty_comms
         self._settings = settings or orchestrator.settings
-        #: Drafts awaiting approval, keyed by case_id. Held here rather than on the
-        #: Case because an unapproved draft is not yet part of the case record.
-        self._pending_drafts: dict[str, DraftComms] = {}
 
     # ------------------------------------------------------------------ #
     # Agent-facing: open a gate
@@ -124,22 +121,27 @@ class HumanGateService:
     ) -> Case:
         """Agent 1 step 1.9 — hand the draft package to gate 1.
 
-        The draft is parked in the service, not sent. Nothing external happens until
-        a human calls `approve_and_send`.
+        The draft is persisted onto `Case.pending_draft` — not sent, and not held
+        in-process — so a restart while the case sits at PENDING_ANALYST_APPROVAL
+        does not lose the draft gate 1 is reviewing (spec 11 §reliability). Nothing
+        external happens until a human calls `approve_and_send`.
         """
-        self._pending_drafts[case.case_id] = draft
-        return self.open_gate(
+        parked = self._orch.update_without_transition(
             case,
+            step="1.9.draft",
+            actor=Actor.orchestrator(),
+            rationale="draft parked pending gate-1 review",
+            updates={"pending_draft": draft},
+        )
+        return self.open_gate(
+            parked,
             GateType.PRE_SEND_REVIEW,
             assigned_to,
-            context={"trade_id": case.trade_id, "subject": draft.subject},
+            context={"trade_id": parked.trade_id, "subject": draft.subject},
         )
 
-    def pending_draft(self, case_id: str) -> DraftComms | None:
-        return self._pending_drafts.get(case_id)
-
     def build_gate1_package(self, case: Case) -> Gate1Package:
-        draft = self._pending_drafts.get(case.case_id)
+        draft = case.pending_draft
         if draft is None:
             raise TransitionError(f"no pending draft for case {case.case_id}")
         warnings: list[str] = []
@@ -183,14 +185,23 @@ class HumanGateService:
         The approval is recorded *before* the send, and the SENT transition is a
         separate step the state machine gates on that recorded approval (spec 05
         G2). An edited draft is re-validated against the fixed template type, so
-        "Edit & Send" cannot turn structured comms back into free text (FR4).
+        "Edit & Send" cannot turn structured comms back into free text (FR4), and
+        is persisted onto the case before sending so the audit trail reflects what
+        was actually sent.
         """
-        draft = edited or self._pending_drafts.get(case.case_id)
-        if draft is None:
-            raise TransitionError(f"no draft to send for case {case.case_id}")
         if edited is not None:
             draft = DraftComms.model_validate(edited.model_dump())
-            self._pending_drafts[case.case_id] = draft
+            case = self._orch.update_without_transition(
+                case,
+                step="1.9.edit",
+                actor=Actor.human(actor_id),
+                rationale="draft edited before send",
+                updates={"pending_draft": draft},
+            )
+        else:
+            draft = case.pending_draft
+        if draft is None:
+            raise TransitionError(f"no draft to send for case {case.case_id}")
 
         approved = self._orch.close_gate(
             case,
@@ -238,7 +249,6 @@ class HumanGateService:
             Actor.human(actor_id),
             comments=rationale,
         )
-        self._pending_drafts.pop(case.case_id, None)
         return self._orch.kill_switch(rejected, Actor.human(actor_id), rationale)
 
     def reassign(

@@ -19,7 +19,7 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..domain.case import AuditEntry, Case, ExternalPrice, InternalPrice
+from ..domain.case import AuditEntry, Case, DraftComms, ExternalPrice, InternalPrice
 from ..domain.enums import ExternalPriceSource, GateType
 
 
@@ -146,29 +146,11 @@ class NotificationReceipt(_Model):
     sent_at: datetime
 
 
-class DraftComms(_Model):
-    """The structured outbound draft from spec 05 §comms template.
-
-    FR4: the template is fixed and the payload is structured; the rendered body is
-    a projection of these fields, never hand-written free text.
-    """
-
-    case_id: str
-    case_reference_id: str
-    subject: str
-    trade_id: str
-    counterparty: str
-    internal_price: InternalPrice
-    counterparty_price: Decimal
-    reference_prices: list[ExternalPrice]
-    contractual_fixing_source: str
-    fixing_source_citation: str
-    divergence_bps: Decimal
-    requested_action: str
-    sla_due_at: datetime
-    #: Set when spec 10 §1 left one or more reference sources missing, so the
-    #: gate-1 reviewer sees the warning rather than an apparently complete draft.
-    partial_price_data: bool = False
+# DraftComms lives in domain/case.py, not here: Case.pending_draft (spec 11
+# §reliability — the draft must survive a restart while gate 1 is open) needs to
+# reference it, and domain/ must not import from tools/ (tools/ already imports
+# from domain/ — importing the other way would be circular). Re-exported here so
+# `tools.contracts.DraftComms` keeps working for existing callers.
 
 
 class BookingUpdate(_Model):

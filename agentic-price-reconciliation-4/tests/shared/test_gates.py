@@ -87,6 +87,33 @@ def test_submit_for_approval_parks_the_draft_without_sending(
     assert submitted.open_gate(GateType.PRE_SEND_REVIEW) is not None
 
 
+def test_pending_draft_survives_a_store_reopen(tmp_path, settings, new_case: Case):
+    """spec 11 §reliability — a restart during PENDING_ANALYST_APPROVAL must not
+    lose the draft gate 1 is reviewing (the fix for the bug where the draft only
+    lived in an in-process dict)."""
+    from reconciliation.store.sqlite_store import SqliteStore
+
+    db = tmp_path / "cases.db"
+    store = SqliteStore(db)
+    orch = Orchestrator(store=store, settings=settings)
+    gates = HumanGateService(
+        orchestrator=orch,
+        notifications=fakes.FakeNotificationService(),
+        counterparty_comms=fakes.FakeCounterpartyComms(),
+    )
+    case = _drafted_case(orch, new_case)
+    submitted = gates.submit_for_approval(case, _draft(case), "analyst-1")
+    store.close()
+
+    reopened_store = SqliteStore(db)
+    try:
+        reopened = reopened_store.get(submitted.case_id)
+        assert reopened.pending_draft is not None
+        assert reopened.pending_draft.trade_id == case.trade_id
+    finally:
+        reopened_store.close()
+
+
 def test_approve_and_send_records_approval_then_sends_then_awaits(
     orchestrator: Orchestrator,
     gate_service: HumanGateService,

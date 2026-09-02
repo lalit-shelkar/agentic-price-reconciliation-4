@@ -114,6 +114,33 @@ class HumanGateRecord(_Model):
         return self.status == GateStatus.PENDING
 
 
+class DraftComms(_Model):
+    """The structured outbound draft from spec 05 §comms template.
+
+    FR4: the template is fixed and the payload is structured; the rendered body is
+    a projection of these fields, never hand-written free text. Lives here rather
+    than in `tools/contracts.py` because `Case.pending_draft` below needs it, and
+    `domain/` must not depend on `tools/` (the dependency runs the other way).
+    """
+
+    case_id: str
+    case_reference_id: str
+    subject: str
+    trade_id: str
+    counterparty: str
+    internal_price: InternalPrice
+    counterparty_price: Decimal
+    reference_prices: list[ExternalPrice]
+    contractual_fixing_source: str
+    fixing_source_citation: str
+    divergence_bps: Decimal
+    requested_action: str
+    sla_due_at: datetime
+    #: Set when spec 10 §1 left one or more reference sources missing, so the
+    #: gate-1 reviewer sees the warning rather than an apparently complete draft.
+    partial_price_data: bool = False
+
+
 class ManualTask(_Model):
     """An out-of-band human task raised by a spec 10 §1 failure path.
 
@@ -191,6 +218,12 @@ class Case(_Model):
     human_gates: list[HumanGateRecord] = Field(default_factory=list)
     manual_tasks: list[ManualTask] = Field(default_factory=list)
     resolution: Resolution | None = None
+
+    #: The structured draft awaiting Human gate 1 action (spec 05 step 1.9).
+    #: Persisted on the Case rather than held in-process, so a restart while a
+    #: case sits at PENDING_ANALYST_APPROVAL does not lose the draft that gate 1
+    #: is reviewing (spec 11 §reliability).
+    pending_draft: DraftComms | None = None
 
     # --- flags set by the error paths in spec 10, not free-form metadata ---
     partial_price_data: bool = Field(
