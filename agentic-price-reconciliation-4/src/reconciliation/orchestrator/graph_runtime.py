@@ -53,19 +53,36 @@ from pathlib import Path
 from typing import Callable, TypeVar
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 T = TypeVar("T")
 
 
-def build_checkpointer(path: str | Path = ":memory:") -> BaseCheckpointSaver:
+def build_checkpointer(
+    path: str | Path = ":memory:",
+    allowed_state_types: list[tuple[str, str]] | None = None,
+) -> BaseCheckpointSaver:
     """A `SqliteSaver` over its own connection, with the same pragmas as
     `SqliteStore` (WAL + autocommit) for the same reason: safe concurrent access
     without holding a long-lived implicit transaction open.
+
+    `allowed_state_types` is a deny-by-default allowlist of `(module, qualname)`
+    pairs for non-builtin types the graph's state schema carries (e.g. Case's
+    pydantic sub-models used before a Case exists). Without an explicit allowlist,
+    the checkpointer's msgpack deserializer logs "unregistered type" warnings for
+    every such value and, per LangGraph's own guidance, will refuse to deserialize
+    them at all in a future version. This matters more here than in a typical
+    LangGraph app: the checkpoint DB sits alongside a system whose whole point is a
+    tamper-evident audit trail (spec 09) — deserializing arbitrary unregistered
+    types from that file if it were ever compromised is exactly the risk the
+    allowlist exists to close off. Each agent's graph module should pass the exact
+    list of pydantic types its own state schema uses; do not pass a wildcard.
     """
     conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL")
-    saver = SqliteSaver(conn)
+    serde = JsonPlusSerializer(allowed_msgpack_modules=allowed_state_types or [])
+    saver = SqliteSaver(conn, serde=serde)
     saver.setup()
     return saver
 
