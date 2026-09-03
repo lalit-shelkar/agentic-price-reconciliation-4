@@ -27,14 +27,21 @@ src/reconciliation/
   orchestrator/    SHARED    state machine, engine, retry wrapper, timers,
                               LangGraph checkpointer/thread-id plumbing
   tools/           SHARED    spec 08 tool contracts + fakes
+  tools/adapters/  SHARED    real tool implementations (LLM-backed email parser
+                              + term sheet extraction so far)
+  llm/             SHARED    provider-agnostic LLM client — see llm/client.py's
+                              docstring for where an LLM is/isn't allowed to run
   gates/           SHARED    spec 07 both human checkpoints
   agent1/          AGENT 1   spec 05 only
   agent2/          AGENT 2   spec 06 only
 tests/
   shared/          SHARED
+  llm/             SHARED
   agent1/          AGENT 1
   agent2/          AGENT 2
   conftest.py      SHARED
+demo/
+  run_workflow.py  SHARED — runnable end-to-end demo, see `python demo/run_workflow.py --help`
 ```
 
 **Rule:** if you need a change in a SHARED file, do not make it on your feature
@@ -117,6 +124,12 @@ for each in the docstring. The Agent 2 owner fills in the bodies. Changing a stu
   a case moving.
 - **Every transition carries a rationale.** `Orchestrator.transition` requires it —
   spec 09 wants a decision rationale, not just a status pair.
+- **An LLM may only run inside a tool adapter (`tools/adapters/`), never in agent
+  decision logic.** Break detection, the comms template, intent classification and
+  auto-close criteria stay deterministic — see `llm/client.py`'s module docstring
+  for the reasoning and spec citations. Adding an LLM call to `agent1/rules.py`,
+  `agent1/drafting.py`, `agent2/intent.py` or `agent2/auto_close.py` is exactly the
+  change spec 05 step 1.3 and spec 09 rule out.
 
 ## Build sequence
 
@@ -131,12 +144,27 @@ Tracks `architecture.md` §6.
 | 5. Human gate 2 + loop-back | ✅ done | `develop` |
 | 6. Enable auto-close after shadow-mode validation | blocked — needs MRM review | — |
 | 7. Audit/compliance hardening + MRM review | not started | — |
+| 8. LLM abstraction + real email/term-sheet adapters | ✅ done (`llm/`, `tools/adapters/`) | `develop` |
 
 Agent 1's graph (`src/reconciliation/agent1/graph.py`) was the reference pattern
 Agent 2's (`agent2/graph.py`) followed — same LangGraph shape, same "no
 `interrupt()`" rule, same `orchestrator/graph_runtime.py` plumbing. Both are merged
 to `develop`; the workflow is now end-to-end (detect → draft → gate 1 → respond →
-resolve → gate 2 → close) with 152 tests passing.
+resolve → gate 2 → close) with 174 tests passing.
+
+**Try it end to end:** `python demo/run_workflow.py` runs the real agents against
+the fakes, with a real LLM adapter (`llm.FakeLlmClient` by default, or
+`--llm anthropic` with `ANTHROPIC_API_KEY` set) reading a sample email. See
+`demo/run_workflow.py --help` for the other paths it can walk (dispute, no-reply
+SLA escalation, straight-through auto-close, a prompt-injection attempt).
+
+Step 8 answers "where's the LLM, can we swap models": `llm/client.py` is the one
+interface every provider implements (`llm/anthropic_client.py`,
+`llm/fake.py`); `llm/factory.py` is the only place a provider name is known.
+It only backs the two tools that are genuinely "read unstructured text into
+structured fields" — `tools/adapters/llm_email_parser.py` and
+`llm_term_sheet.py`. Every decision (break detection, drafting, intent, auto-close)
+stays deterministic; see the new guardrail bullet above.
 
 ### Known follow-ups (not blockers, tracked here so they aren't lost)
 

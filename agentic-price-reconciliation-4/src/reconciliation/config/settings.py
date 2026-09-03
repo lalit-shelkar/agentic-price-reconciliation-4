@@ -126,6 +126,28 @@ class RetrySettings(_Model):
     backoff_multiplier: float = Field(default=2.0, ge=1.0)
 
 
+class LlmSettings(_Model):
+    """Which model the LLM-backed *tool adapters* use (`tools/adapters/`).
+
+    Nothing an agent decides is affected by this — see `llm/client.py`'s module
+    docstring for the boundary. Changing model or provider is a config change:
+    `llm/factory.py` is the only code that knows provider names.
+    """
+
+    #: `fake` by default so an unconfigured environment produces an obviously
+    #: synthetic extraction instead of silently billing a real API.
+    provider: str = "fake"
+    model: str = "claude-sonnet-5"
+    #: Keep at 0. spec 09 requires an auditor be able to reconstruct why a case was
+    #: actioned; a sampled read of the same email undermines that.
+    temperature: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_tokens: int = Field(default=1024, ge=1)
+    timeout_seconds: float = Field(default=30.0, gt=0)
+    #: Read from the environment, never from the config file — a key committed
+    #: next to the thresholds is a key in version control.
+    api_key_env_var: str = "ANTHROPIC_API_KEY"
+
+
 class Settings(_Model):
     """Root config object. Load via `load_settings()`."""
 
@@ -136,6 +158,7 @@ class Settings(_Model):
     sla: SlaSettings = Field(default_factory=SlaSettings)
     loop_guard: LoopGuardSettings = Field(default_factory=LoopGuardSettings)
     retry: RetrySettings = Field(default_factory=RetrySettings)
+    llm: LlmSettings = Field(default_factory=LlmSettings)
 
     #: Recorded on every audit entry an agent produces (FR8, spec 09).
     model_version: str = "unset"

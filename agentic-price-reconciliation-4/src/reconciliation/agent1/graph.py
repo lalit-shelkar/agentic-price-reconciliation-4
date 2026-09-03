@@ -184,7 +184,10 @@ def build_agent1_graph(deps: Agent1Deps) -> StateGraph:
             rationale=(
                 f"external prices pulled ({len(state['external_prices'])}/"
                 f"{len(tools.market_data)} sources); divergence "
-                f"{state['divergence_bps']}bps >= tolerance {state['tolerance_bps']}bps"
+                # Rounded for the human reading the audit trail; the unrounded
+                # value is on `Case.divergence_bps` if anyone needs to recompute.
+                f"{state['divergence_bps']:.2f}bps >= tolerance "
+                f"{state['tolerance_bps']}bps"
             ),
         )
         return {"case_id": pulled.case_id}

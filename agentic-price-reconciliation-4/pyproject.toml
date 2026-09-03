@@ -15,6 +15,11 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
 ]
+# Optional on purpose: the core package and the whole test suite run against
+# `llm.FakeLlmClient`, so nothing requires a provider SDK to be installed.
+llm = [
+    "anthropic>=0.40",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
