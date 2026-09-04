@@ -23,6 +23,25 @@ from .client import LlmClient, LlmAuthError
 from .fake import FakeLlmClient
 
 
+def _build_gemini(settings: LlmSettings) -> LlmClient:
+    from .gemini_client import GeminiLlmClient
+
+    api_key = os.environ.get(settings.api_key_env_var)
+
+    if not api_key:
+        raise LlmAuthError(
+            f"provider 'gemini' needs an API key in "
+            f"${settings.api_key_env_var}"
+        )
+
+    return GeminiLlmClient(
+        model=settings.model,
+        api_key=api_key,
+        temperature=settings.temperature,
+        max_tokens=settings.max_tokens,
+        timeout_seconds=settings.timeout_seconds,
+    )
+
 def _build_anthropic(settings: LlmSettings) -> LlmClient:
     from .anthropic_client import AnthropicLlmClient
 
@@ -47,6 +66,7 @@ def _build_fake(settings: LlmSettings) -> LlmClient:
 
 _PROVIDERS: dict[str, Callable[[LlmSettings], LlmClient]] = {
     "anthropic": _build_anthropic,
+    "gemini": _build_gemini,
     "fake": _build_fake,
 }
 

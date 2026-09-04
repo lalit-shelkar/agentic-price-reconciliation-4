@@ -136,8 +136,8 @@ class LlmSettings(_Model):
 
     #: `fake` by default so an unconfigured environment produces an obviously
     #: synthetic extraction instead of silently billing a real API.
-    provider: str = "fake"
-    model: str = "claude-sonnet-5"
+    provider: str = "gemini"
+    model: str = "gemini-2.5-flash"
     #: Keep at 0. spec 09 requires an auditor be able to reconstruct why a case was
     #: actioned; a sampled read of the same email undermines that.
     temperature: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -145,7 +145,7 @@ class LlmSettings(_Model):
     timeout_seconds: float = Field(default=30.0, gt=0)
     #: Read from the environment, never from the config file — a key committed
     #: next to the thresholds is a key in version control.
-    api_key_env_var: str = "ANTHROPIC_API_KEY"
+    api_key_env_var: str = "GEMINI_API_KEY"
 
 
 class Settings(_Model):
